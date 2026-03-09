@@ -763,7 +763,8 @@ function dismissIOSOverlay(e) {
     doUnlock();
   }
   iosOverlay.remove();
-  render();
+  // Start the game directly — no second tap needed on iPhone
+  setTimeout(() => { startGame(); }, 100);
 }
 
 // Use touchend (not touchstart) so iOS registers it as a clean gesture
