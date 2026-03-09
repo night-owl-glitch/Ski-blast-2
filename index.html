@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<title>SKI BLAST 1994</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{
+    width:100%;height:100%;overflow:hidden;
+    background:#0f1a2e;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:'Press Start 2P',monospace;
+    touch-action:none;
+    -webkit-user-select:none;user-select:none;
+  }
+  #wrap{
+    display:flex;flex-direction:column;align-items:center;
+    width:100%;max-width:520px;
+  }
+  #title{color:#00e5ff;font-size:clamp(7px,2vw,11px);margin-bottom:8px;letter-spacing:2px;text-shadow:0 0 10px #00e5ff;}
+  #gameCanvas{
+    display:block;
+    border:3px solid #00e5ff;
+    box-shadow:0 0 25px rgba(0,229,255,0.35);
+    border-radius:4px;
+    cursor:pointer;
+    /* fills available space, aspect ratio maintained by JS */
+    width:100%;
+    image-rendering:pixelated;
+    image-rendering:-moz-crisp-edges;
+  }
+  /* Touch control buttons */
+  #controls{
+    display:flex;width:100%;margin-top:10px;gap:10px;padding:0 6px;
+  }
+  .ctrl-btn{
+    flex:1;height:70px;border-radius:12px;border:2px solid #00e5ff;
+    background:rgba(0,229,255,0.08);
+    color:#00e5ff;font-family:'Press Start 2P',monospace;
+    font-size:clamp(16px,4vw,26px);
+    display:flex;align-items:center;justify-content:center;
+    cursor:pointer;
+    transition:background 0.07s;
+    -webkit-user-select:none;user-select:none;
+    touch-action:none;
+  }
+  .ctrl-btn.pressed{background:rgba(0,229,255,0.28);border-color:#fff;}
+  #subtitle{color:#7ec8e3;font-size:clamp(5px,1.5vw,7px);margin-top:8px;opacity:0.6;text-align:center;padding:0 8px;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="title">❄ SKI BLAST 1994 ❄</div>
+  <canvas id="gameCanvas" width="500" height="600"></canvas>
+  <div id="controls">
+    <div class="ctrl-btn" id="btnLeft">◀</div>
+    <div class="ctrl-btn" id="btnRight">▶</div>
+  </div>
+  <div id="subtitle">TAP BUTTONS TO STEER · TAP SCREEN TO START · P=POV M=MUSIC</div>
+</div>
+
+<!-- iOS audio unlock splash - shown first on mobile -->
+<div id="splash" style="
+  position:fixed;inset:0;z-index:999;
+  background:linear-gradient(160deg,#0a1428,#0f2040);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:'Press Start 2P',monospace;cursor:pointer;
+">
+  <div style="color:#00e5ff;font-size:clamp(14px,4vw,22px);text-shadow:0 0 20px #00e5ff;margin-bottom:20px;">❄ SKI BLAST 1994 ❄</div>
+  <div style="color:#fff;font-size:clamp(8px,2.5vw,13px);margin-bottom:36px;">A 1990s Skiing Adventure</div>
+  <div id="splashBtn" style="
+    background:#e63946;color:#fff;
+    font-family:'Press Start 2P',monospace;
+    font-size:clamp(10px,3vw,16px);
+    padding:18px 36px;border-radius:10px;
+    border:none;cursor:pointer;
+    box-shadow:0 0 20px rgba(230,57,70,0.5);
+    animation:pulse 1.2s ease-in-out infinite;
+  ">TAP TO START!</div>
+  <div style="color:#7ec8e3;font-size:clamp(5px,1.5vw,8px);margin-top:24px;opacity:0.7;">(enables sound on iPhone)</div>
+</div>
+<style>
+@keyframes pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.06);}}
+</style>
+
+<script>
+// ── Canvas scaling ──────────────────────────────────────────────
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d');
+const W=500,H=600,GAME_DURATION=30,SKIER_Y=120;
+
+function resizeCanvas(){
+  const wrap=document.getElementById('wrap');
+  const controlsH=document.getElementById('controls').offsetHeight+10;
+  const titleH=document.getElementById('title').offsetHeight+8;
+  const subH=document.getElementById('subtitle').offsetHeight+8;
+  const maxW=Math.min(window.innerWidth-12, 520);
+  const maxH=window.innerHeight - titleH - controlsH - subH - 24;
+  const scale=Math.min(maxW/W, maxH/H);
+  canvas.style.width=(W*scale)+'px';
+  canvas.style.height=(H*scale)+'px';
+}
+window.addEventListener('resize',resizeCanvas);
+window.addEventListener('orientationchange',()=>setTimeout(resizeCanvas,120));
+resizeCanvas();
+
+// Prevent scroll/bounce on iOS
+document.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+document.addEventListener('touchstart',e=>{if(e.target===document.body)e.preventDefault();},{passive:false});
+
+// ── AUDIO ────────────────────────────────────────────────────────
+let audioCtx=null,musicPlaying=false,musicEnabled=true,musicNodes=[];
+let audioUnlocked=false;
+
+function getAC(){
+  if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  return audioCtx;
+}
+
+// iOS requires AudioContext created + real buffer played inside a direct gesture
+function unlockAudio(){
+  if(audioUnlocked) return;
+  if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  const ac=audioCtx;
+  const doUnlock=()=>{
+    try{
+      const buf=ac.createBuffer(1,Math.floor(ac.sampleRate*.1),ac.sampleRate);
+      const src=ac.createBufferSource();
+      src.buffer=buf;
+      const g=ac.createGain();g.gain.value=0.001;
+      src.connect(g);g.connect(ac.destination);src.start(0);
+      audioUnlocked=true;
+    }catch(e){}
+  };
+  if(ac.state==='suspended') ac.resume().then(doUnlock).catch(doUnlock);
+  else doUnlock();
+}
+
+function tone(ac,dest,freq,type,t,dur,vol){
+  if(freq<=0)return;
+  const o=ac.createOscillator(),g=ac.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.connect(g);g.connect(dest);o.start(t);o.stop(t+dur+0.02);
+}
+function nz(ac,dest,t,dur,vol,decay){
+  const buf=ac.createBuffer(1,Math.floor(ac.sampleRate*dur),ac.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.exp(-i/(ac.sampleRate*decay));
+  const s=ac.createBufferSource(),g=ac.createGain();
+  s.buffer=buf;g.gain.value=vol;s.connect(g);g.connect(dest);s.start(t);
+}
+
+const MEL=[
+  523,.12,659,.12,784,.12,1047,.24,784,.12,659,.12,523,.12,440,.12,
+  523,.12,659,.12,784,.12,880,.24,784,.12,659,.24,0,.12,
+  698,.12,784,.12,880,.12,1047,.24,880,.12,784,.12,698,.12,587,.12,
+  659,.12,784,.12,659,.12,587,.24,523,.12,440,.24,0,.12,
+  392,.12,440,.12,523,.12,587,.12,659,.12,784,.12,880,.12,1047,.12,
+  880,.12,784,.12,659,.12,587,.12,523,.24,392,.12,0,.12,
+  523,.12,659,.12,784,.12,1047,.24,784,.24,659,.12,523,.12,
+  440,.12,523,.12,659,.12,784,.24,523,.36,0,.12
+];
+const BASS=[
+  131,.24,131,.24,165,.24,165,.24,131,.24,131,.24,110,.24,110,.24,
+  175,.24,175,.24,165,.24,165,.24,131,.24,131,.24,131,.48,
+  131,.24,131,.24,165,.24,165,.24,131,.24,131,.24,110,.24,110,.24,
+  98,.24,98,.24,110,.24,110,.24,131,.48,131,.48
+];
+
+function startMusic(){
+  if(!musicEnabled)return;
+  stopMusic();
+  const ac=getAC();
+  // On iOS the context may still be suspended briefly after unlock gesture
+  const doStart=()=>{
+    if(!musicPlaying) return; // was stopped before we got here
+    const master=ac.createGain();master.gain.value=0.16;master.connect(ac.destination);
+    musicNodes.push(master);
+    const loopLen=MEL.reduce((s,v,i)=>i%2===1?s+v:s,0);
+    let loopStart=ac.currentTime+0.1;
+    function sched(){
+      if(!musicPlaying)return;
+      let t=loopStart;
+      for(let i=0;i<MEL.length;i+=2){
+        const f=MEL[i],d=MEL[i+1];
+        if(f>0){tone(ac,master,f,'square',t,d*.85,.35);tone(ac,master,f*.75,'square',t,d*.85,.12);}
+        t+=d;
+      }
+      t=loopStart;
+      for(let i=0;i<BASS.length;i+=2){tone(ac,master,BASS[i],'sawtooth',t,BASS[i+1]*.7,.22);t+=BASS[i+1];}
+      const beat=.24,bars=Math.ceil(loopLen/(beat*8));
+      for(let b=0;b<bars;b++){
+        const bs=loopStart+b*beat*8;
+        for(let i=0;i<8;i++){
+          if(i%2===0)nz(ac,master,bs+i*beat,.08,.28,.01);
+          else nz(ac,master,bs+i*beat,.1,.15,.025);
+          nz(ac,master,bs+i*beat,.04,.07,.005);
+        }
+      }
+      loopStart+=loopLen;
+      const delay=(loopStart-ac.currentTime-.5)*1000;
+      if(musicPlaying)setTimeout(sched,Math.max(50,delay));
+    }
+    musicPlaying=true;sched();
+  };
+  musicPlaying=true; // set flag now so doStart doesn't bail
+  if(ac.state==='suspended') ac.resume().then(doStart).catch(doStart);
+  else doStart();
+}
+function stopMusic(){
+  musicPlaying=false;
+  musicNodes.forEach(n=>{try{n.disconnect();}catch(e){}});
+  musicNodes=[];
+}
+function sfx(type){
+  if(!musicEnabled)return;
+  const ac=getAC();if(ac.state==='suspended')ac.resume();
+  const g=ac.createGain();g.connect(ac.destination);
+  if(type==='gate'){[880,1100,1320].forEach((f,i)=>tone(ac,g,f,'square',ac.currentTime+i*.06,.12,.15));}
+  else if(type==='boost'){for(let i=0;i<8;i++)tone(ac,g,400+i*100,'sawtooth',ac.currentTime+i*.04,.08,.1);}
+  else if(type==='caught'){[220,196,165,147,131].forEach((f,i)=>tone(ac,g,f,'square',ac.currentTime+i*.12,.18,.2));}
+}
+
+// ── GAME STATE ───────────────────────────────────────────────────
+let gameState='idle',score=0,timeLeft=GAME_DURATION,skierX=W/2;
+let direction='straight',boosting=false,boostTimer=0,worldY=0;
+let items=[],snowflakes=[],abomY=700,abomCatching=false;
+let flashScore=0,lastTime=null,animFrame=null,shakeX=0;
+let povMode=false,camLean=0,spd=200;
+const keys={left:false,right:false};
+
+// ── EXPLOSION STATE ──────────────────────────────────────────────
+let exploding=false,explodeParticles=[],explodeTimer=0;
+const EXPLODE_DURATION=1.8;
+
+function triggerExplosion(){
+  if(exploding)return;
+  exploding=true;explodeTimer=0;
+  // Spawn snowflake particles from abom position
+  explodeParticles=[];
+  const ex=skierX,ey=abomY;
+  for(let i=0;i<80;i++){
+    const angle=Math.random()*Math.PI*2;
+    const spd2=60+Math.random()*320;
+    explodeParticles.push({
+      x:ex,y:ey,
+      vx:Math.cos(angle)*spd2,
+      vy:Math.sin(angle)*spd2-100,
+      size:3+Math.random()*8,
+      rot:Math.random()*Math.PI*2,
+      rotSpd:(Math.random()-.5)*8,
+      alpha:1,
+      type:Math.floor(Math.random()*3) // 0=star,1=circle,2=crystal
+    });
+  }
+  sfxExplosion();
+}
+
+function sfxExplosion(){
+  if(!musicEnabled)return;
+  const ac=getAC();if(ac.state==='suspended')ac.resume();
+  const g=ac.createGain();g.connect(ac.destination);
+  // Big ascending victory fanfare
+  [262,330,392,523,659,784,1047].forEach((f,i)=>{
+    tone(ac,g,f,'square',ac.currentTime+i*.07,.18,.2);
+    tone(ac,g,f*2,'square',ac.currentTime+i*.07,.12,.08);
+  });
+  // Noise burst
+  nz(ac,g,ac.currentTime,.3,.3,.04);
+}
+
+function drawSnowflakeParticle(p){
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot);ctx.globalAlpha=p.alpha;
+  ctx.strokeStyle='#fff';ctx.fillStyle='#aaddff';ctx.lineWidth=1.5;
+  if(p.type===0){
+    // 6-pointed snowflake
+    for(let a=0;a<6;a++){
+      ctx.save();ctx.rotate(a*Math.PI/3);
+      ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,-p.size);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,-p.size*.6);ctx.lineTo(-p.size*.25,-p.size*.4);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,-p.size*.6);ctx.lineTo(p.size*.25,-p.size*.4);ctx.stroke();
+      ctx.restore();
+    }
+  } else if(p.type===1){
+    ctx.beginPath();ctx.arc(0,0,p.size*.5,0,Math.PI*2);ctx.fillStyle='rgba(180,230,255,0.9)';ctx.fill();
+    ctx.strokeStyle='#fff';ctx.stroke();
+  } else {
+    // Crystal diamond
+    ctx.beginPath();ctx.moveTo(0,-p.size);ctx.lineTo(p.size*.5,0);ctx.lineTo(0,p.size);ctx.lineTo(-p.size*.5,0);ctx.closePath();
+    ctx.fillStyle='rgba(200,240,255,0.85)';ctx.fill();ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function updateExplosion(dt){
+  if(!exploding)return;
+  explodeTimer+=dt;
+  const prog=explodeTimer/EXPLODE_DURATION;
+  explodeParticles.forEach(p=>{
+    p.x+=p.vx*dt;p.y+=p.vy*dt;
+    p.vy+=200*dt; // gravity
+    p.rot+=p.rotSpd*dt;
+    p.alpha=Math.max(0,1-prog*1.1);
+  });
+  explodeParticles.forEach(drawSnowflakeParticle);
+  if(explodeTimer>=EXPLODE_DURATION){
+    exploding=false;
+    // Reset run with fresh 30 seconds, keep score
+    resetRun();
+  }
+}
+
+function resetRun(){
+  genItems();timeLeft=GAME_DURATION;skierX=W/2;direction='straight';
+  boosting=false;boostTimer=0;worldY=0;abomY=700;abomCatching=false;
+  flashScore=0;lastTime=null;camLean=0;shakeX=0;spd=200;
+  gameState='playing';startMusic();
+  if(animFrame)cancelAnimationFrame(animFrame);
+  animFrame=requestAnimationFrame(loop);
+}
+
+for(let i=0;i<40;i++) snowflakes.push({
+  x:Math.random()*W,y:Math.random()*H,
+  speed:.5+Math.random()*1.2,size:1+Math.random()*2.5,opacity:.3+Math.random()*.5
+});
+
+function genItems(){
+  items=[];let y=300,id=0;
+  while(y<12000){
+    items.push({id:id++,type:'gate',x:80+Math.random()*(W-160),y,passed:false});
+    y+=180+Math.random()*120;
+    if(Math.random()<.35){items.push({id:id++,type:'boost',x:50+Math.random()*(W-100),y,passed:false});y+=100+Math.random()*80;}
+  }
+}
+
+function startGame(){
+  genItems();score=0;timeLeft=GAME_DURATION;skierX=W/2;direction='straight';
+  boosting=false;boostTimer=0;worldY=0;abomY=700;abomCatching=false;
+  flashScore=0;lastTime=null;camLean=0;shakeX=0;spd=200;
+  gameState='playing';startMusic();
+  if(animFrame)cancelAnimationFrame(animFrame);
+  animFrame=requestAnimationFrame(loop);
+}
+
+// ── 3RD PERSON DRAW ─────────────────────────────────────────────
+function draw3P(){
+  const sg=ctx.createLinearGradient(0,0,0,H);
+  sg.addColorStop(0,'#7ec8e3');sg.addColorStop(1,'#d6eeff');
+  ctx.fillStyle=sg;ctx.fillRect(0,0,W,H);
+  const ss=60,so=worldY%ss;
+  ctx.fillStyle='rgba(180,210,240,0.5)';
+  for(let i=0;i<14;i++) ctx.fillRect(W/2-1,i*ss-so,2,28);
+  snowflakes.forEach(f=>{
+    ctx.beginPath();ctx.arc(f.x,f.y,f.size,0,Math.PI*2);
+    ctx.fillStyle=`rgba(255,255,255,${f.opacity})`;ctx.fill();
+  });
+  items.forEach(item=>{
+    const sy=item.y-worldY+SKIER_Y;
+    if(sy<-60||sy>H+60)return;
+    if(item.type==='gate'){ctx.save();if(item.passed)ctx.globalAlpha=.2;drawGate(item.x,sy);ctx.restore();}
+    else if(item.type==='boost'&&!item.passed)drawBoost(item.x,sy);
+  });
+  if(abomY<680)drawAbom(skierX,abomY,abomCatching);
+  drawSkier3P(skierX,SKIER_Y);
+}
+
+function drawGate(x,y){
+  ctx.fillStyle='#e63946';ctx.beginPath();ctx.roundRect(x-32,y-4,6,32,3);ctx.fill();
+  ctx.beginPath();ctx.arc(x-29,y-6,5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#2196f3';ctx.beginPath();ctx.roundRect(x+26,y-4,6,32,3);ctx.fill();
+  ctx.beginPath();ctx.arc(x+29,y-6,5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='rgba(255,235,59,0.8)';ctx.beginPath();ctx.roundRect(x-29,y,58,8,2);ctx.fill();
+}
+function drawBoost(x,y){
+  ctx.save();ctx.translate(x,y);
+  ctx.fillStyle='#00e5ff';ctx.beginPath();ctx.moveTo(0,-14);ctx.lineTo(6,0);ctx.lineTo(14,-4);ctx.lineTo(2,14);ctx.lineTo(-4,2);ctx.lineTo(-14,6);ctx.closePath();ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.7)';ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(4,0);ctx.lineTo(10,-3);ctx.lineTo(1,10);ctx.lineTo(-3,1);ctx.lineTo(-10,4);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#00e5ff';ctx.font='5px "Press Start 2P"';ctx.textAlign='center';ctx.fillText('BOOST',0,26);
+  ctx.restore();
+}
+function drawSkier3P(x,y){
+  ctx.save();ctx.translate(x,y);
+  const lean=direction==='left'?-18:direction==='right'?18:0;
+  ctx.rotate(lean*Math.PI/180);
+  const sc=boosting?'#00ffff':'#fff';
+  if(boosting){ctx.beginPath();ctx.ellipse(0,22,10,22,0,0,Math.PI*2);ctx.fillStyle='rgba(0,229,255,.18)';ctx.fill();}
+  ctx.beginPath();ctx.ellipse(0,-2,7,10,0,0,Math.PI*2);ctx.fillStyle='#e63946';ctx.fill();
+  ctx.beginPath();ctx.arc(0,-13,6,0,Math.PI*2);ctx.fillStyle='#f4a261';ctx.fill();
+  ctx.fillStyle='rgba(34,34,34,.7)';ctx.beginPath();ctx.roundRect(-6,-16,12,4,2);ctx.fill();
+  ctx.fillStyle=sc;
+  ctx.beginPath();ctx.roundRect(direction==='left'?-16:-12,7,4,16,2);ctx.fill();
+  ctx.beginPath();ctx.roundRect(direction==='right'?8:4,7,4,16,2);ctx.fill();
+  ctx.strokeStyle=sc;ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(-8,2);ctx.lineTo(-14,18);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(8,2);ctx.lineTo(14,18);ctx.stroke();
+  ctx.restore();
+}
+function drawAbom(x,y,catching){
+  ctx.save();ctx.translate(x+shakeX,y);
+  ctx.fillStyle='#e8f4fd';
+  ctx.beginPath();ctx.ellipse(0,0,22,28,0,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(0,-32,16,0,Math.PI*2);ctx.fill();
+  ctx.save();ctx.translate(-22,-5);ctx.rotate(-.35);ctx.beginPath();ctx.ellipse(0,0,8,14,0,0,Math.PI*2);ctx.fill();ctx.restore();
+  ctx.save();ctx.translate(22,-5);ctx.rotate(.35);ctx.beginPath();ctx.ellipse(0,0,8,14,0,0,Math.PI*2);ctx.fill();ctx.restore();
+  ctx.fillStyle='#c0392b';
+  ctx.beginPath();ctx.arc(-6,-36,3,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(6,-36,3,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#111';
+  ctx.beginPath();ctx.arc(-5,-36,1.5,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(7,-36,1.5,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='#c0392b';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(-8,-28);ctx.quadraticCurveTo(0,-22,8,-28);ctx.stroke();
+  ctx.fillStyle='white';ctx.beginPath();ctx.roundRect(-6,-28,4,5,1);ctx.fill();
+  ctx.beginPath();ctx.roundRect(2,-28,4,5,1);ctx.fill();
+  if(catching){
+    ctx.strokeStyle='#c0392b';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(-28,2);ctx.lineTo(-38,12);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(28,2);ctx.lineTo(38,12);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ── FIRST PERSON DRAW ────────────────────────────────────────────
+function drawPOV(dt){
+  const targetLean=direction==='left'?-.08:direction==='right'?.08:0;
+  camLean+=(targetLean-camLean)*8*dt;
+  ctx.save();
+  ctx.translate(W/2,H/2);ctx.rotate(camLean);ctx.translate(-W/2,-H/2);
+  const sg=ctx.createLinearGradient(0,0,0,H*.46);
+  sg.addColorStop(0,'#4a9dbf');sg.addColorStop(.6,'#92c8de');sg.addColorStop(1,'#c8e6f0');
+  ctx.fillStyle=sg;ctx.fillRect(0,0,W,H*.46);
+  ctx.fillStyle='#b8d8e8';
+  ctx.beginPath();ctx.moveTo(-10,H*.38);
+  ctx.lineTo(60,H*.18);ctx.lineTo(150,H*.3);ctx.lineTo(230,H*.13);
+  ctx.lineTo(330,H*.27);ctx.lineTo(420,H*.11);ctx.lineTo(510,H*.24);
+  ctx.lineTo(510,H*.42);ctx.lineTo(-10,H*.42);ctx.closePath();ctx.fill();
+  const ng=ctx.createLinearGradient(0,H*.43,0,H);
+  ng.addColorStop(0,'#eaf6ff');ng.addColorStop(1,'#ffffff');
+  ctx.fillStyle=ng;ctx.fillRect(0,H*.43,W,H*.57);
+  ctx.fillStyle='#ddf0fc';ctx.fillRect(0,H*.42,W,H*.04);
+  const vpX=W/2+(W/2-skierX)*.5,vpY=H*.46;
+  const groundH=H-vpY;
+  ctx.strokeStyle='rgba(170,205,230,.5)';ctx.lineWidth=1.5;
+  for(let i=0;i<18;i++){const t=i/18;ctx.beginPath();ctx.moveTo(vpX,vpY);ctx.lineTo(vpX+(t-.5)*900,H+40);ctx.stroke();}
+  ctx.strokeStyle='rgba(140,185,215,.75)';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(vpX-10,vpY);ctx.lineTo(vpX-90,H+20);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(vpX+10,vpY);ctx.lineTo(vpX+90,H+20);ctx.stroke();
+  items.forEach(item=>{
+    if(item.passed)return;
+    const wd=item.y-worldY;if(wd<0||wd>750)return;
+    const depth=wd/750;
+    const sc=Math.pow(1-depth,1.6)*2.8+.05;
+    const sy=vpY+depth*groundH*1.1;if(sy>H+80)return;
+    const sx=vpX+(item.x-skierX)*(1-depth)*1.6;
+    ctx.save();ctx.translate(sx,sy);ctx.scale(sc,sc);
+    if(item.type==='gate'){
+      ctx.fillStyle='#e63946';ctx.beginPath();ctx.roundRect(-42,-2,8,44,4);ctx.fill();
+      ctx.beginPath();ctx.arc(-38,-5,8,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#2196f3';ctx.beginPath();ctx.roundRect(34,-2,8,44,4);ctx.fill();
+      ctx.beginPath();ctx.arc(38,-5,8,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='rgba(255,235,59,.85)';ctx.beginPath();ctx.roundRect(-38,0,76,12,3);ctx.fill();
+    } else if(item.type==='boost'){
+      ctx.fillStyle='#00e5ff';
+      ctx.beginPath();ctx.moveTo(0,-20);ctx.lineTo(8,0);ctx.lineTo(20,-6);ctx.lineTo(2,20);ctx.lineTo(-6,2);ctx.lineTo(-20,8);ctx.closePath();ctx.fill();
+      ctx.fillStyle='rgba(255,255,255,.7)';
+      ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(5,0);ctx.lineTo(13,-4);ctx.lineTo(1,13);ctx.lineTo(-4,1);ctx.lineTo(-13,5);ctx.closePath();ctx.fill();
+    }
+    ctx.restore();
+  });
+  snowflakes.forEach(f=>{
+    const d=1-f.y/H;const px=vpX+(f.x-W/2)*(1+d*2);
+    ctx.beginPath();ctx.arc(px,f.y,f.size*(1+d),0,Math.PI*2);
+    ctx.fillStyle=`rgba(255,255,255,${f.opacity})`;ctx.fill();
+  });
+  if(abomY<680){
+    const prog=Math.max(0,1-abomY/700);
+    const as=.2+prog*3.5,ay=H-60-prog*240;
+    ctx.save();ctx.translate(W/2+shakeX,ay);ctx.scale(as,as);
+    ctx.fillStyle='#e8f4fd';
+    ctx.beginPath();ctx.ellipse(0,0,22,28,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(0,-32,16,0,Math.PI*2);ctx.fill();
+    ctx.save();ctx.translate(-22,-5);ctx.rotate(-.35);ctx.beginPath();ctx.ellipse(0,0,8,14,0,0,Math.PI*2);ctx.fill();ctx.restore();
+    ctx.save();ctx.translate(22,-5);ctx.rotate(.35);ctx.beginPath();ctx.ellipse(0,0,8,14,0,0,Math.PI*2);ctx.fill();ctx.restore();
+    ctx.fillStyle='#c0392b';ctx.beginPath();ctx.arc(-6,-36,3,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(6,-36,3,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#c0392b';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(-8,-28);ctx.quadraticCurveTo(0,-22,8,-28);ctx.stroke();
+    ctx.fillStyle='white';ctx.beginPath();ctx.roundRect(-6,-28,4,5,1);ctx.fill();ctx.beginPath();ctx.roundRect(2,-28,4,5,1);ctx.fill();
+    if(abomCatching){ctx.strokeStyle='#c0392b';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-28,2);ctx.lineTo(-55,25);ctx.stroke();ctx.beginPath();ctx.moveTo(28,2);ctx.lineTo(55,25);ctx.stroke();}
+    ctx.restore();
+  }
+  const bob=Math.sin(worldY*.05)*4,skiTilt=direction==='left'?-12:direction==='right'?12:0;
+  ctx.save();ctx.translate(W/2,H+bob);ctx.rotate(skiTilt*Math.PI/180);
+  const sc2=boosting?'#00ffff':'#ddeeff';
+  ctx.fillStyle=sc2;ctx.beginPath();ctx.roundRect(-68,-22,30,110,10);ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,.2)';ctx.lineWidth=1;ctx.stroke();
+  ctx.beginPath();ctx.roundRect(38,-22,30,110,10);ctx.fill();ctx.stroke();
+  ctx.strokeStyle=sc2;ctx.lineWidth=4;
+  ctx.beginPath();ctx.moveTo(-95,-130);ctx.lineTo(-55,-15);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(95,-130);ctx.lineTo(55,-15);ctx.stroke();
+  ctx.fillStyle=sc2;ctx.beginPath();ctx.arc(-55,-15,6,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(55,-15,6,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+  if(boosting){
+    ctx.strokeStyle='rgba(0,229,255,.2)';ctx.lineWidth=2;
+    for(let i=0;i<20;i++){const lx=Math.random()*W,ly=Math.random()*H,len=30+Math.random()*80;ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(vpX+(lx-vpX)*.65,vpY+(ly-vpY)*.65+len);ctx.stroke();}
+  }
+  ctx.restore();
+}
+
+// ── HUD ──────────────────────────────────────────────────────────
+function drawHUD(){
+  ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,0,W,38);
+  ctx.font='10px "Press Start 2P"';ctx.fillStyle='#00e5ff';ctx.textAlign='left';ctx.fillText('TIME: '+Math.ceil(timeLeft)+'s',12,24);
+  ctx.fillStyle=flashScore>0?'#ffeb3b':'#fff';ctx.textAlign='center';ctx.fillText(score+' PTS',W/2,24);
+  if(boosting){ctx.fillStyle='#00e5ff';ctx.font='8px "Press Start 2P"';ctx.textAlign='right';ctx.fillText('\u26a1BOOST!',W-10,24);}
+  ctx.font='6px "Press Start 2P"';ctx.fillStyle='#7ec8e3';ctx.textAlign='right';ctx.fillText(povMode?'POV':'3RD',W-8,34);
+  ctx.fillStyle=timeLeft>10?'#00e5ff':timeLeft>5?'#ff9800':'#e63946';ctx.fillRect(0,36,W*(timeLeft/GAME_DURATION),4);
+  ctx.fillStyle='#111';ctx.fillRect(W*(timeLeft/GAME_DURATION),36,W*(1-timeLeft/GAME_DURATION),4);
+  // Hint when abom is close
+  if(abomY<500&&abomY>0&&gameState==='playing'){
+    const pulse=Math.sin(Date.now()*.008)*.5+.5;
+    ctx.save();ctx.globalAlpha=.6+pulse*.4;
+    ctx.fillStyle='#ffeb3b';ctx.font='7px "Press Start 2P"';ctx.textAlign='center';
+    ctx.fillText('\u2605 PRESS BOTH BUTTONS TO BLAST! \u2605',W/2,H-10);
+    ctx.restore();
+  }
+}
+
+function drawIdleScreen(){
+  ctx.fillStyle='rgba(8,16,36,.88)';ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#00e5ff';ctx.font='22px "Press Start 2P"';ctx.fillText('SKI BLAST',W/2,148);
+  ctx.font='9px "Press Start 2P"';ctx.fillStyle='#7ec8e3';ctx.fillText('1994',W/2,174);
+  ctx.fillStyle='#fff';ctx.font='7px "Press Start 2P"';
+  ctx.fillText('TAP BUTTONS TO STEER',W/2,222);
+  ctx.fillText('Pass gates for points',W/2,245);
+  ctx.fillStyle='#00e5ff';ctx.fillText('\u26a1 Grab boosts for speed',W/2,268);
+  ctx.fillStyle='#e63946';ctx.fillText('Beware the SNOWMAN!',W/2,291);
+  ctx.fillStyle='#ffeb3b';ctx.fillText('\u2605 BOTH BTNS = BLAST HIM! \u2605',W/2,312);
+  // Mode buttons
+  ctx.fillStyle=!povMode?'#e63946':'#1a2a3a';ctx.beginPath();ctx.roundRect(55,328,170,32,4);ctx.fill();
+  ctx.fillStyle=!povMode?'#fff':'#556';ctx.font='6px "Press Start 2P"';ctx.fillText('3RD PERSON',141,348);
+  ctx.fillStyle=povMode?'#e63946':'#1a2a3a';ctx.beginPath();ctx.roundRect(275,328,170,32,4);ctx.fill();
+  ctx.fillStyle=povMode?'#fff':'#556';ctx.fillText('FIRST PERSON',361,348);
+  // Music
+  ctx.fillStyle=musicEnabled?'#003a4a':'#1a1a1a';ctx.beginPath();ctx.roundRect(W/2-80,372,160,28,4);ctx.fill();
+  ctx.fillStyle=musicEnabled?'#00e5ff':'#445';ctx.font='6px "Press Start 2P"';
+  ctx.fillText(musicEnabled?'\u266a MUSIC ON':'\u266a MUSIC OFF',W/2,390);
+  // Start button - big and tap-friendly
+  ctx.fillStyle='#e63946';ctx.beginPath();ctx.roundRect(W/2-110,412,220,52,8);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='12px "Press Start 2P"';ctx.fillText('TAP TO PLAY!',W/2,444);
+}
+
+function drawDeadScreen(){
+  ctx.fillStyle='rgba(8,16,36,.9)';ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#e63946';ctx.font='16px "Press Start 2P"';ctx.fillText('GOTCHA!',W/2,185);
+  ctx.fillStyle='#fff';ctx.font='8px "Press Start 2P"';
+  ctx.fillText('The Abominable Snowman',W/2,222);ctx.fillText('got you!',W/2,245);
+  ctx.fillStyle='#ffeb3b';ctx.font='13px "Press Start 2P"';ctx.fillText('SCORE: '+score,W/2,292);
+  ctx.fillStyle=!povMode?'#e63946':'#1a2a3a';ctx.beginPath();ctx.roundRect(55,315,170,28,4);ctx.fill();
+  ctx.fillStyle=!povMode?'#fff':'#556';ctx.font='6px "Press Start 2P"';ctx.fillText('3RD PERSON',141,334);
+  ctx.fillStyle=povMode?'#e63946':'#1a2a3a';ctx.beginPath();ctx.roundRect(275,315,170,28,4);ctx.fill();
+  ctx.fillStyle=povMode?'#fff':'#556';ctx.fillText('FIRST PERSON',361,334);
+  ctx.fillStyle='#e63946';ctx.beginPath();ctx.roundRect(W/2-110,358,220,52,8);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='12px "Press Start 2P"';ctx.fillText('TRY AGAIN!',W/2,390);
+}
+
+// ── MAIN LOOP ────────────────────────────────────────────────────
+function loop(ts){
+  if(!lastTime)lastTime=ts;
+  const dt=Math.min((ts-lastTime)/1000,.05);
+  lastTime=ts;
+
+  // BOTH BUTTONS = EXPLODE SNOWMAN (only when abom is visible)
+  if(keys.left&&keys.right&&abomY<680&&!exploding&&gameState==='playing'){
+    triggerExplosion();
+    stopMusic();
+    // Run a dedicated explosion animation loop
+    function explodeLoop(ts2){
+      if(!lastTime)lastTime=ts2;
+      const dt2=Math.min((ts2-lastTime)/1000,.05);
+      lastTime=ts2;
+      render(dt2);
+      if(exploding) animFrame=requestAnimationFrame(explodeLoop);
+    }
+    lastTime=null;
+    cancelAnimationFrame(animFrame);
+    animFrame=requestAnimationFrame(explodeLoop);
+    return;
+  }
+
+  spd=boosting?320:200;
+  const lat=boosting?200:140;
+  worldY+=spd*dt;
+  direction='straight';
+  if(keys.left&&!keys.right){skierX-=lat*dt;direction='left';}
+  if(keys.right&&!keys.left){skierX+=lat*dt;direction='right';}
+  skierX=Math.max(24,Math.min(W-24,skierX));
+  if(boostTimer>0){boostTimer-=dt;if(boostTimer<=0){boostTimer=0;boosting=false;}}
+  if(flashScore>0)flashScore-=dt;
+  timeLeft-=dt;
+  items.forEach(item=>{
+    if(item.passed)return;
+    const sy=item.y-worldY+SKIER_Y;if(sy<-60||sy>H+60)return;
+    const dx=Math.abs(skierX-item.x),dy=Math.abs(SKIER_Y-sy);
+    if(item.type==='gate'&&dy<20&&dx<36){item.passed=true;score++;flashScore=.3;sfx('gate');}
+    else if(item.type==='boost'&&dy<22&&dx<22){item.passed=true;boostTimer=3;boosting=true;sfx('boost');}
+  });
+  if(timeLeft<=5&&timeLeft>0){abomY=700-(5-timeLeft)/5*580;shakeX=0;}
+  if(timeLeft<=0){
+    abomY=SKIER_Y+20;abomCatching=true;shakeX=(Math.random()-.5)*16;timeLeft=0;
+    sfx('caught');stopMusic();
+    setTimeout(()=>{gameState='dead';},800);
+    lastTime=null;cancelAnimationFrame(animFrame);
+    render(dt);return;
+  }
+  snowflakes.forEach(f=>{f.y+=f.speed*spd*dt*.18;if(f.y>H)f.y-=H;});
+  render(dt);
+  if(gameState==='playing')animFrame=requestAnimationFrame(loop);
+}
+
+function render(dt=.016){
+  ctx.clearRect(0,0,W,H);
+  if(gameState==='playing'||gameState==='dead'){
+    if(povMode)drawPOV(dt);else draw3P();
+    drawHUD();
+    if(gameState==='dead')drawDeadScreen();
+    updateExplosion(dt);
+  } else {
+    const sg=ctx.createLinearGradient(0,0,0,H);
+    sg.addColorStop(0,'#7ec8e3');sg.addColorStop(1,'#d6eeff');
+    ctx.fillStyle=sg;ctx.fillRect(0,0,W,H);
+    drawIdleScreen();
+  }
+}
+
+// ── INPUT: KEYBOARD ──────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'){keys.left=true;e.preventDefault();}
+  if(e.key==='ArrowRight'){keys.right=true;e.preventDefault();}
+  if((e.key==='Enter'||e.key===' ')&&gameState!=='playing'){unlockAudio();startGame();return;}
+  if(e.key==='p'||e.key==='P'){povMode=!povMode;render();}
+  if(e.key==='m'||e.key==='M'){musicEnabled=!musicEnabled;if(!musicEnabled)stopMusic();else if(gameState==='playing')startMusic();render();}
+});
+document.addEventListener('keyup',e=>{
+  if(e.key==='ArrowLeft')keys.left=false;
+  if(e.key==='ArrowRight')keys.right=false;
+});
+
+// ── INPUT: TOUCH BUTTONS ─────────────────────────────────────────
+function setupBtn(id,keyName){
+  const btn=document.getElementById(id);
+  function press(e){
+    e.preventDefault();
+    unlockAudio();
+    keys[keyName]=true;
+    btn.classList.add('pressed');
+  }
+  function release(e){
+    e.preventDefault();
+    keys[keyName]=false;
+    btn.classList.remove('pressed');
+  }
+  btn.addEventListener('touchstart',press,{passive:false});
+  btn.addEventListener('touchend',release,{passive:false});
+  btn.addEventListener('touchcancel',release,{passive:false});
+  btn.addEventListener('mousedown',press);
+  btn.addEventListener('mouseup',release);
+  btn.addEventListener('mouseleave',release);
+}
+setupBtn('btnLeft','left');
+setupBtn('btnRight','right');
+
+// ── INPUT: CANVAS TAP ────────────────────────────────────────────
+function handleCanvasTap(cx,cy){
+  unlockAudio();
+  if(gameState==='idle'){
+    // Mode buttons
+    if(cy>=328&&cy<=360){
+      if(cx>=55&&cx<=225){povMode=false;render();return;}
+      if(cx>=275&&cx<=445){povMode=true;render();return;}
+    }
+    // Music button
+    if(cy>=372&&cy<=400){musicEnabled=!musicEnabled;if(!musicEnabled)stopMusic();render();return;}
+    // Start button
+    if(cy>=412&&cy<=464){startGame();return;}
+    startGame();
+  } else if(gameState==='dead'){
+    if(cy>=315&&cy<=343){
+      if(cx>=55&&cx<=225){povMode=false;render();return;}
+      if(cx>=275&&cx<=445){povMode=true;render();return;}
+    }
+    startGame();
+  }
+}
+
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const r=canvas.getBoundingClientRect();
+  const scaleX=W/r.width,scaleY=H/r.height;
+  const t=e.changedTouches[0];
+  handleCanvasTap((t.clientX-r.left)*scaleX,(t.clientY-r.top)*scaleY);
+},{passive:false});
+
+canvas.addEventListener('click',e=>{
+  const r=canvas.getBoundingClientRect();
+  handleCanvasTap((e.clientX-r.left)*(W/r.width),(e.clientY-r.top)*(H/r.height));
+});
+
+// ── IOS AUDIO UNLOCK OVERLAY ─────────────────────────────────────
+// iOS Safari REQUIRES AudioContext to be created AND resumed
+// inside a direct user gesture. Show a fullscreen tap overlay first.
+const iosOverlay = document.createElement('div');
+Object.assign(iosOverlay.style, {
+  position:'fixed', inset:'0', zIndex:'9999',
+  background:'rgba(10,20,40,0.95)',
+  display:'flex', flexDirection:'column',
+  alignItems:'center', justifyContent:'center',
+  fontFamily:'"Press Start 2P",monospace',
+  cursor:'pointer', touchAction:'manipulation',
+  WebkitUserSelect:'none', userSelect:'none'
+});
+iosOverlay.innerHTML = `
+  <div style="color:#00e5ff;font-size:clamp(13px,5vw,20px);text-shadow:0 0 16px #00e5ff;margin-bottom:24px;text-align:center;letter-spacing:2px">\u2744 SKI BLAST 1994 \u2744</div>
+  <div style="background:#e63946;color:#fff;font-size:clamp(12px,4vw,18px);padding:20px 36px;border-radius:10px;text-align:center;line-height:2;box-shadow:0 0 20px #e63946aa">
+    TAP TO PLAY
+  </div>
+  <div style="color:#7ec8e3;font-size:clamp(5px,1.8vw,8px);margin-top:22px;opacity:0.65;text-align:center;line-height:2">
+    Tap once to unlock sound<br>on iPhone &amp; Android
+  </div>
+`;
+document.body.appendChild(iosOverlay);
+
+function dismissIOSOverlay(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  // MUST create AudioContext inside this gesture for iOS
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const ac = audioCtx;
+  const doUnlock = () => {
+    try {
+      const buf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      const g = ac.createGain();
+      g.gain.value = 0.001;
+      src.connect(g);
+      g.connect(ac.destination);
+      src.start(0);
+      audioUnlocked = true;
+    } catch(err) {
+      audioUnlocked = true;
+    }
+  };
+  if (ac.state === 'suspended') {
+    ac.resume().then(doUnlock).catch(doUnlock);
+  } else {
+    doUnlock();
+  }
+  iosOverlay.remove();
+  render();
+}
+
+// Use touchend (not touchstart) so iOS registers it as a clean gesture
+iosOverlay.addEventListener('touchend', dismissIOSOverlay, { passive: false });
+iosOverlay.addEventListener('click', dismissIOSOverlay);
+</script>
+</body>
+</html>
